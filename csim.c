@@ -59,6 +59,7 @@ static void parse_arguments(int argc, char **argv) {
                 break;
             case 'K':
                 // TODO
+                fprintf(stderr, "ERROR: %s: %s\n", optarg, strerror(errno));
                 break;
             case 'B':
                 // TODO
