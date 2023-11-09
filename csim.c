@@ -59,29 +59,44 @@ static void parse_arguments(int argc, char **argv) {
                 break;
             case 'K':
                 // TODO
-                fprintf(stderr, "ERROR: %s: %s\n", optarg, strerror(errno));
+                K = atoi(optarg);
+                //fprintf(stderr, "ERROR: %s: %s\n", optarg, strerror(errno));
                 break;
             case 'B':
                 // TODO
+                B = atoi(optarg);
                 break;
             case 'p':
                 if (!strcmp(optarg, "FIFO")) {
-                    policy = FIFO;
+                    policy =  1;
                 }
                 // TODO: parse LRU, exit with error for unknown policy
+                else if (!strcmp(optarg, "LRU")) {
+                    policy = 2;
+                }
+                else {
+                    fprintf(stderr, "ERROR: Unknown policy %s\n", optarg);
+                    exit(1);
+                }
                 break;
             case 't':
                 // TODO: open file trace_fp for reading
+                trace_fp = fopen(optarg, "r");
+
                 if (!trace_fp) {
                     fprintf(stderr, "ERROR: %s: %s\n", optarg, strerror(errno));
                     exit(1);
                 }
+                
+                //fclose(optarg);
                 break;
             case 'v':
                 // TODO
+                verbose = 1;
                 break;
             case 'h':
                 // TODO
+                print_usage();
                 exit(0);
             default:
                 print_usage();
@@ -109,10 +124,14 @@ static void parse_arguments(int argc, char **argv) {
  * Cache data structures
  * TODO: Define your own!
  */
+struct Line {
+    char valid;
+    unsigned long tag;
+    unsigned int LRU_counter;
+    unsigned int FIFO_counter;
+};
 
-
-
-
+struct Line** cache = NULL;
 
 
 /**
@@ -124,7 +143,10 @@ static void parse_arguments(int argc, char **argv) {
  * TODO: Implement
  */
 static void allocate_cache() {
-
+    cache = (struct Line **)malloc(S * sizeof(struct Line*));
+    for (int i = 0; i < S; i++) {
+        cache[i] = (struct Line*) malloc(K * sizeof(struct Line));
+    } 
 
 
 }
@@ -138,8 +160,10 @@ static void allocate_cache() {
  * TODO: Implement
  */
 static void free_cache() {
-
-
+    for (int i = 0; i < S; i++) {
+        free(cache[i]);
+    }
+    free(cache);
 
 }
 
@@ -147,6 +171,14 @@ static void free_cache() {
 int miss_count     = 0;
 int hit_count      = 0;
 int eviction_count = 0;
+
+static void addLRU(unsigned long set, int index) {
+    for (int i = 0; i < K; i++) {
+        if (i != index) {
+            cache[set][i].LRU_counter++;
+        }
+    }
+}
 
 /**
  * Simulate a memory access.
@@ -159,10 +191,88 @@ int eviction_count = 0;
  * TODO: Implement
  */
 static void access_data(unsigned long addr) {
-    printf("Access to %016lx\n", addr);
-
-
+    unsigned long tag = addr >> (INT_LOG2(S) + INT_LOG2(B));
+    unsigned long temp = 0xFFFFFFFFFFFFFFFF >> (64 - INT_LOG2(S));
+    unsigned long set = (addr >> INT_LOG2(B) ) & (temp);
+    if (INT_LOG2(S) == 0) {
+        set = 0;
+    } 
+    int cnt = 0;
+    int cnt_full = 0;
+    int space_index = 0;
+    unsigned int curr = 0;
+    for (int i = 0; i < K; i++) {
+        if (cache[set][i].tag == tag && cache[set][i].valid == 1) {
+            hit_count++;
+            //printf("%s", "hit ");
+            cache[set][i].LRU_counter = 1;
+            addLRU(set,i);
+            break;
+        }
+        else {
+            if (cache[set][i].valid == 1) {
+                cnt_full++;
+                if (cache[set][i].FIFO_counter > curr) {
+                    curr = cache[set][i].FIFO_counter;
+                }
+            }
+            else {
+                if (space_index == 0) {
+                    space_index = i;
+                }
+            }
+            cnt++;
+        }
+    }
+    if (cnt == K) {
+        if (cnt_full == K) {
+            miss_count++;
+            eviction_count++;
+            //printf("%s", "miss eviction ");
+            if (policy == 1) {
+                unsigned int FIFO_curr = cache[set][0].FIFO_counter;
+                space_index = 0;
+                for (int i = 0; i < K; i++) {
+                    if (cache[set][i].FIFO_counter < FIFO_curr) {
+                        space_index = i;
+                        FIFO_curr = cache[set][i].FIFO_counter;
+                    }
+                }
+                cache[set][space_index].tag = tag;
+                cache[set][space_index].valid = 1;
+                cache[set][space_index].LRU_counter = 1;
+                addLRU(set,space_index);
+                cache[set][space_index].FIFO_counter = curr + 1;
+            }
+            else if (policy == 2) {
+                unsigned int LRU_curr = cache[set][0].LRU_counter;
+                space_index = 0;
+                for (int i = 0; i < K; i++) {
+                    if (cache[set][i].LRU_counter > LRU_curr) {
+                        space_index = i;
+                        LRU_curr = cache[set][i].LRU_counter;
+                    }
+                }
+                cache[set][space_index].tag = tag;
+                cache[set][space_index].valid = 1;
+                cache[set][space_index].LRU_counter = 1;
+                addLRU(set,space_index);
+                cache[set][space_index].FIFO_counter = curr + 1;
+            }
+        }
+        else {
+            //printf("%s", "miss ");
+            miss_count++;
+            cache[set][space_index].tag = tag;
+            cache[set][space_index].valid = 1;
+            cache[set][space_index].LRU_counter = 1;
+            addLRU(set,space_index);
+            cache[set][space_index].FIFO_counter = curr + 1;
+        }
+    }
+    //printf("Access to %016lx\n", addr);
 }
+
 
 /**
  * Replay the input trace.
@@ -177,9 +287,33 @@ static void access_data(unsigned long addr) {
  * TODO: Implement
  */
 static void replay_trace() {
-    access_data(0);
+    char buf[1024];
+    unsigned long int addr;
+    unsigned int len;
+    int modify = 1;
 
+    while (fgets(buf, sizeof(buf), trace_fp) != NULL) {
+        if (buf[0] == 'I') continue;
+        if (buf[1] == 'M') {
+            modify = 2;
+        }
+        sscanf(buf + 3, "%lx,%u", &addr, &len);
+        //for (int i = 0; i < modify; i++) {
+        unsigned long int end_addr = addr + len;
+        unsigned long int start_block = addr / B;
+        unsigned long int end_block = (end_addr - 1) / B;
 
+        for (unsigned long int block = start_block; block <= end_block; block++) {
+            // Call access_data for each block within the address range
+            unsigned long block_addr = block * B;
+            for (int i = 0; i < modify; i++) {
+            access_data(block_addr);
+            }
+            //printf("\n");
+        }
+        modify = 1;
+        //}
+    }
 }
 
 /**
